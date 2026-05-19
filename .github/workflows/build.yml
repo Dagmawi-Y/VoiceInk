@@ -25,30 +25,36 @@ jobs:
       # The framework takes ~5–10 min to compile from source.
       # We cache by the whisper.cpp HEAD commit so the cache auto-busts
       # when whisper.cpp releases a new version, but stays warm otherwise.
+      #
+      # NOTE: whisper is cloned into the repo workspace (.whisper-src/) rather
+      # than ~/VoiceInk-Dependencies/ because `working-directory:` in Actions
+      # does NOT expand ~ — it would try to cd into a literal path starting
+      # with "~/..." and fail with "No such file or directory".
+      # $GITHUB_WORKSPACE is always an absolute path and is safe to use here.
       - name: Get whisper.cpp HEAD commit (for cache key)
         id: whisper_ref
         run: |
           COMMIT=$(git ls-remote https://github.com/ggerganov/whisper.cpp.git HEAD | cut -f1)
           echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+          echo "whisper_dir=$GITHUB_WORKSPACE/.whisper-src" >> "$GITHUB_OUTPUT"
 
       - name: Cache whisper.xcframework
         id: cache_whisper
         uses: actions/cache@v4
         with:
-          path: ~/VoiceInk-Dependencies/whisper.cpp/build-apple/whisper.xcframework
+          path: ${{ steps.whisper_ref.outputs.whisper_dir }}/build-apple/whisper.xcframework
           key: whisper-xcframework-${{ steps.whisper_ref.outputs.commit }}
 
       # ── 3. Build whisper.xcframework (only on cache miss) ──────────────────
       - name: Clone whisper.cpp
         if: steps.cache_whisper.outputs.cache-hit != 'true'
         run: |
-          mkdir -p ~/VoiceInk-Dependencies
           git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git \
-              ~/VoiceInk-Dependencies/whisper.cpp
+              "${{ steps.whisper_ref.outputs.whisper_dir }}"
 
       - name: Build whisper.xcframework
         if: steps.cache_whisper.outputs.cache-hit != 'true'
-        working-directory: ~/VoiceInk-Dependencies/whisper.cpp
+        working-directory: ${{ steps.whisper_ref.outputs.whisper_dir }}
         run: ./build-xcframework.sh
 
       # ── 4. Resolve Swift Package Manager dependencies ──────────────────────
@@ -66,7 +72,7 @@ jobs:
       # stripped entitlements, no developer team required.
       - name: Build VoiceInk.app
         run: |
-          WHISPER_FW="$HOME/VoiceInk-Dependencies/whisper.cpp/build-apple/whisper.xcframework"
+          WHISPER_FW="${{ steps.whisper_ref.outputs.whisper_dir }}/build-apple/whisper.xcframework"
           ENTITLEMENTS="$(pwd)/VoiceInk/VoiceInk.local.entitlements"
 
           xcodebuild \
