@@ -14,23 +14,19 @@ concurrency:
 jobs:
   build:
     name: Build (ad-hoc, no certificate)
-    runs-on: macos-15         # macOS 14.4+ guaranteed
-    env:
-      # Bypass all xcode-select/PATH ambiguity by calling xcodebuild directly.
-      # Every approach to switching the active Xcode via env vars or actions
-      # still results in SPM resolving with the wrong swift binary. Using the
-      # absolute path is the only thing guaranteed to work.
-      XCODEBUILD: /Applications/Xcode_16.4.app/Contents/Developer/usr/bin/xcodebuild
+    # macos-26 is required: LLMkit's Package.swift declares swift-tools-version 6.2,
+    # which ships with Xcode 26. macos-15 tops out at Xcode 16.4 / SwiftPM 6.1.
+    runs-on: macos-26
+
     steps:
       # ── 1. Checkout ────────────────────────────────────────────────────────
       - name: Checkout VoiceInk
         uses: actions/checkout@v4
 
-      - name: Verify Xcode 16.4 available
+      - name: Confirm Swift tools version
         run: |
-          $XCODEBUILD -version
-          # Confirm swift-package inside 16.4 reports tools >= 6.2
-          /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-package --version
+          xcodebuild -version
+          swift package --version
 
       # ── 2. Cache whisper.xcframework ───────────────────────────────────────
       # The framework takes ~5–10 min to compile from source.
@@ -73,7 +69,7 @@ jobs:
       # separate step surfaces network errors early and keeps build logs clean.
       - name: Resolve SPM packages
         run: |
-          $XCODEBUILD -resolvePackageDependencies \
+          xcodebuild -resolvePackageDependencies \
             -project VoiceInk.xcodeproj \
             -scheme VoiceInk \
             -clonedSourcePackagesDirPath .spm-packages
@@ -86,7 +82,7 @@ jobs:
           WHISPER_FW="${{ steps.whisper_ref.outputs.whisper_dir }}/build-apple/whisper.xcframework"
           ENTITLEMENTS="$(pwd)/VoiceInk/VoiceInk.local.entitlements"
 
-          $XCODEBUILD \
+          xcodebuild \
             -project VoiceInk.xcodeproj \
             -scheme VoiceInk \
             -configuration Debug \
