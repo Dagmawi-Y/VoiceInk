@@ -26,7 +26,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Select Xcode 16.4
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          # Put Xcode 16.4's own swift/swiftc first in PATH so SPM picks up
+          # tools version 6.2 rather than the system swift (which reports 6.1).
+          echo "/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin" >> "$GITHUB_PATH"
+          # Sanity-check: both should now report 16.4 / Swift 6.2
+          xcode-select -p
+          swift --version
 
       # ── 2. Cache whisper.xcframework ───────────────────────────────────────
       # The framework takes ~5–10 min to compile from source.
