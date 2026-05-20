@@ -64,6 +64,12 @@ jobs:
         working-directory: ${{ steps.whisper_ref.outputs.whisper_dir }}
         run: ./build-xcframework.sh
 
+      - name: Make Whisper framework visible to Xcode
+        run: |
+          mkdir -p "$HOME/VoiceInk-Dependencies/whisper.cpp/build-apple"
+          rsync -a "${{ steps.whisper_ref.outputs.whisper_dir }}/build-apple/whisper.xcframework" \
+            "$HOME/VoiceInk-Dependencies/whisper.cpp/build-apple/"
+
       # ── 4. Resolve Swift Package Manager dependencies ──────────────────────
       # Xcode resolves these automatically during build, but doing it as a
       # separate step surfaces network errors early and keeps build logs clean.
