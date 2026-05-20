@@ -3,48 +3,47 @@ name: Build VoiceInk
 on:
   push:
     branches: [main, master]
+
   pull_request:
     branches: [main, master]
-  workflow_dispatch:          # lets you trigger a build from the Actions tab manually
+
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true   # cancel a running build if you push again
+  cancel-in-progress: true
 
 jobs:
   build:
-    name: Build (ad-hoc, no certificate)
-    # macos-26 is required: LLMkit's Package.swift declares swift-tools-version 6.2,
-    # which ships with Xcode 26. macos-15 tops out at Xcode 16.4 / SwiftPM 6.1.
+    name: Build VoiceInk (ad-hoc)
     runs-on: macos-26
 
     steps:
-      # ── 1. Checkout ────────────────────────────────────────────────────────
-      - name: Checkout VoiceInk
+      # ─────────────────────────────────────────────────────────────
+      # 1. Checkout
+      # ─────────────────────────────────────────────────────────────
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Confirm Swift tools version
+      - name: Confirm Xcode + Swift versions
         run: |
           xcodebuild -version
-          swift package --version
+          swift --version
 
-      # ── 2. Cache whisper.xcframework ───────────────────────────────────────
-      # The framework takes ~5–10 min to compile from source.
-      # We cache by the whisper.cpp HEAD commit so the cache auto-busts
-      # when whisper.cpp releases a new version, but stays warm otherwise.
-      #
-      # NOTE: whisper is cloned into the repo workspace (.whisper-src/) rather
-      # than ~/VoiceInk-Dependencies/ because `working-directory:` in Actions
-      # does NOT expand ~ — it would try to cd into a literal path starting
-      # with "~/..." and fail with "No such file or directory".
-      # $GITHUB_WORKSPACE is always an absolute path and is safe to use here.
-      - name: Get whisper.cpp HEAD commit (for cache key)
+      # ─────────────────────────────────────────────────────────────
+      # 2. Prepare whisper.cpp cache key
+      # ─────────────────────────────────────────────────────────────
+      - name: Get whisper.cpp HEAD commit
         id: whisper_ref
         run: |
           COMMIT=$(git ls-remote https://github.com/ggerganov/whisper.cpp.git HEAD | cut -f1)
+
           echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
           echo "whisper_dir=$GITHUB_WORKSPACE/.whisper-src" >> "$GITHUB_OUTPUT"
 
+      # ─────────────────────────────────────────────────────────────
+      # 3. Cache whisper.xcframework
+      # ─────────────────────────────────────────────────────────────
       - name: Cache whisper.xcframework
         id: cache_whisper
         uses: actions/cache@v4
@@ -52,39 +51,57 @@ jobs:
           path: ${{ steps.whisper_ref.outputs.whisper_dir }}/build-apple/whisper.xcframework
           key: whisper-xcframework-${{ steps.whisper_ref.outputs.commit }}
 
-      # ── 3. Build whisper.xcframework (only on cache miss) ──────────────────
+      # ─────────────────────────────────────────────────────────────
+      # 4. Clone whisper.cpp (cache miss only)
+      # ─────────────────────────────────────────────────────────────
       - name: Clone whisper.cpp
         if: steps.cache_whisper.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git \
-              "${{ steps.whisper_ref.outputs.whisper_dir }}"
+          git clone \
+            --depth 1 \
+            https://github.com/ggerganov/whisper.cpp.git \
+            "${{ steps.whisper_ref.outputs.whisper_dir }}"
 
+      # ─────────────────────────────────────────────────────────────
+      # 5. Build whisper.xcframework (cache miss only)
+      # ─────────────────────────────────────────────────────────────
       - name: Build whisper.xcframework
         if: steps.cache_whisper.outputs.cache-hit != 'true'
         working-directory: ${{ steps.whisper_ref.outputs.whisper_dir }}
-        run: ./build-xcframework.sh
+        run: |
+          chmod +x ./build-xcframework.sh
+          ./build-xcframework.sh
 
-      - name: Make Whisper framework visible to Xcode
+      # ─────────────────────────────────────────────────────────────
+      # 6. Make framework visible to Xcode
+      # ─────────────────────────────────────────────────────────────
+      - name: Install whisper.xcframework
         run: |
           mkdir -p "$HOME/VoiceInk-Dependencies/whisper.cpp/build-apple"
-          rsync -a "${{ steps.whisper_ref.outputs.whisper_dir }}/build-apple/whisper.xcframework" \
+
+          rsync -a \
+            "${{ steps.whisper_ref.outputs.whisper_dir }}/build-apple/whisper.xcframework" \
             "$HOME/VoiceInk-Dependencies/whisper.cpp/build-apple/"
 
-      # ── 4. Resolve Swift Package Manager dependencies ──────────────────────
-      # Xcode resolves these automatically during build, but doing it as a
-      # separate step surfaces network errors early and keeps build logs clean.
-      - name: Resolve SPM packages
+      # ─────────────────────────────────────────────────────────────
+      # 7. Resolve Swift Package Manager dependencies
+      # ─────────────────────────────────────────────────────────────
+      - name: Resolve SPM dependencies
         run: |
-          xcodebuild -resolvePackageDependencies \
+          xcodebuild \
+            -resolvePackageDependencies \
             -project VoiceInk.xcodeproj \
             -scheme VoiceInk \
             -clonedSourcePackagesDirPath .spm-packages
 
-      # ── 5. Build ───────────────────────────────────────────────────────────
-      # Mirrors `make local` exactly: ad-hoc signing, LOCAL_BUILD flag,
-      # stripped entitlements, no developer team required.
+      # ─────────────────────────────────────────────────────────────
+      # 8. Build VoiceInk.app
+      # ─────────────────────────────────────────────────────────────
       - name: Build VoiceInk.app
+        shell: bash
         run: |
+          set -eo pipefail
+
           WHISPER_FW="${{ steps.whisper_ref.outputs.whisper_dir }}/build-apple/whisper.xcframework"
           ENTITLEMENTS="$(pwd)/VoiceInk/VoiceInk.local.entitlements"
 
@@ -103,31 +120,72 @@ jobs:
             "SWIFT_ACTIVE_COMPILATION_CONDITIONS=\$(inherited) LOCAL_BUILD" \
             FRAMEWORK_SEARCH_PATHS="$WHISPER_FW/.." \
             build \
-            | xcpretty --color || true
+            | xcpretty --color
 
-          # xcpretty swallows the exit code — check the pipe explicitly
-          exit ${PIPESTATUS[0]}
-
-      # ── 6. Stage the app ───────────────────────────────────────────────────
-      - name: Stage VoiceInk.app for upload
+      # ─────────────────────────────────────────────────────────────
+      # 9. Locate + verify app bundle
+      # ─────────────────────────────────────────────────────────────
+      - name: Verify build output
+        shell: bash
         run: |
           APP=$(find .build/Build/Products/Debug -name "VoiceInk.app" -type d | head -1)
+
           if [ -z "$APP" ]; then
             echo "ERROR: VoiceInk.app not found"
             find .build/Build/Products -type d -name "*.app" || true
             exit 1
           fi
-          echo "Found: $APP"
-          mkdir -p artifact
-          ditto "$APP" artifact/VoiceInk.app
 
-      # ── 7. Upload artifact ─────────────────────────────────────────────────
-      # Download from the Actions run page as a zip.
-      # 14-day retention keeps storage usage reasonable.
-      - name: Upload VoiceInk.app
+          echo "Found app bundle:"
+          echo "$APP"
+
+          echo
+          echo "Bundle contents:"
+          find "$APP" -maxdepth 2
+
+      # ─────────────────────────────────────────────────────────────
+      # 10. Stage app correctly
+      # IMPORTANT:
+      # We preserve the actual .app bundle itself.
+      # DO NOT copy only Contents/.
+      # ─────────────────────────────────────────────────────────────
+      - name: Stage VoiceInk.app
+        shell: bash
+        run: |
+          APP=$(find .build/Build/Products/Debug -name "VoiceInk.app" -type d | head -1)
+
+          mkdir -p artifact
+
+          ditto "$APP" "artifact/$(basename "$APP")"
+
+          echo
+          echo "Artifact contents:"
+          find artifact -maxdepth 3
+
+      # ─────────────────────────────────────────────────────────────
+      # 11. Create distributable ZIP
+      # This preserves macOS metadata/resource forks properly.
+      # ─────────────────────────────────────────────────────────────
+      - name: Create distributable ZIP
+        shell: bash
+        run: |
+          cd artifact
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            VoiceInk.app \
+            VoiceInk.zip
+
+          echo
+          echo "Created:"
+          ls -lh VoiceInk.zip
+
+      # ─────────────────────────────────────────────────────────────
+      # 12. Upload artifact
+      # ─────────────────────────────────────────────────────────────
+      - name: Upload VoiceInk artifact
         uses: actions/upload-artifact@v4
         with:
           name: VoiceInk-${{ github.sha }}
-          path: artifact/VoiceInk.app
+          path: artifact/VoiceInk.zip
           retention-days: 14
           if-no-files-found: error
