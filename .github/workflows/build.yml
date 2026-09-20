@@ -130,10 +130,10 @@ jobs:
       - name: Verify build output
         shell: bash
         run: |
-          APP=$(find .build/Build/Products/Debug -name "VoiceInk.app" -type d | head -1)
+          APP=$(find .build/Build/Products/Debug -maxdepth 1 -name "VoiceInk*.app" -type d | head -1)
 
           if [ -z "$APP" ]; then
-            echo "ERROR: VoiceInk.app not found"
+            echo "ERROR: VoiceInk app bundle not found"
             find .build/Build/Products -type d -name "*.app" || true
             exit 1
           fi
@@ -154,7 +154,7 @@ jobs:
       - name: Stage VoiceInk.app
         shell: bash
         run: |
-          APP=$(find .build/Build/Products/Debug -name "VoiceInk.app" -type d | head -1)
+          APP=$(find .build/Build/Products/Debug -maxdepth 1 -name "VoiceInk*.app" -type d | head -1)
 
           mkdir -p artifact
 
@@ -172,9 +172,10 @@ jobs:
         shell: bash
         run: |
           cd artifact
+          APP=$(find . -maxdepth 1 -name "VoiceInk*.app" -type d | head -1)
 
           ditto -c -k --sequesterRsrc --keepParent \
-            VoiceInk.app \
+            "$APP" \
             VoiceInk.zip
 
           echo
